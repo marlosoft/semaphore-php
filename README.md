@@ -7,13 +7,13 @@
 composer require marlosoft/semaphore-php
 ```
 
-### Features and Todo list
+### Current Features
 - [x] Send SMS
 - [x] Send Bulk SMS
 - [x] Send OTP
 - [x] Get all messages
 - [x] Get message by ID
-- [ ] Retrieve account
-- [ ] Retrieve account transactions
-- [ ] Retrieve account sender names
-- [ ] Retrieve account users
+- [x] Retrieve account
+- [x] Retrieve account transactions
+- [x] Retrieve account sender names
+- [x] Retrieve account users

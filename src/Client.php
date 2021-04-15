@@ -2,7 +2,6 @@
 
 namespace Marlosoft\Semaphore;
 
-use Exception as BaseException;
 use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Exception\InvalidArgumentException;
 use GuzzleHttp\Exception\RequestException;
@@ -16,7 +15,9 @@ use Throwable;
 class Client
 {
     private const API_ENDPOINT = 'https://api.semaphore.co/api/v4/';
-    private const BULK_LIMIT = 1000;
+    private const MAX = 1000;
+    private const MIN = 100;
+    private const PAGE = 1;
 
     /** @var string $apiKey */
     private $apiKey;
@@ -30,36 +31,59 @@ class Client
     /**
      * @param Response $response
      * @param string|null $className
-     * @return array
-     * @throws BaseException
+     * @param bool $multiple
+     * @return mixed
      */
-    private function parse(Response $response, ?string $className = null): array
+    private function parse(Response $response, ?string $className = null, bool $multiple = false)
     {
         $data = (array)json_decode((string)$response->getBody(), true);
+
         if ($className) {
-            $obj = [];
-            foreach ($data as $v) {
-                $obj[] = new $className($v);
+            if ($multiple) {
+                $obj = [];
+                foreach ($data as $v) {
+                    $obj[] = new $className($v);
+                }
+
+                return $obj;
             }
 
-            return $obj;
+            return new $className($data);
         }
 
         return $data;
     }
 
     /**
+     * @param int|null $limit
+     * @throws Exception
+     */
+    private function validateLimit(?int $limit)
+    {
+        if ($limit && $limit > 1000) {
+            throw new Exception('Result limit exceeded.');
+        }
+    }
+
+    /**
+     * @param string $method
      * @param string $path
      * @param array $options
      * @param string|null $className
-     * @return array
+     * @param bool $multiple
+     * @return mixed
      * @throws Exception
      */
-    public function execute(string $path, array $options, ?string $className = null): array
-    {
+    public function execute(
+        string $method,
+        string $path,
+        array $options,
+        ?string $className = null,
+        bool $multiple = false
+    ) {
         try {
-            $response = $this->httpClient->get($path, $options);
-            return $this->parse($response, $className);
+            $response = $this->httpClient->request(strtoupper($method), $path, $options);
+            return $this->parse($response, $className, $multiple);
         } catch (RequestException $exception) {
             $code = $exception->getCode();
             $message = $exception->getMessage();
@@ -95,47 +119,47 @@ class Client
     }
 
     /**
-     * @param array|string $recipient
+     * @param string|array $recipient
      * @param string $message
-     * @param false $priority
+     * @param bool $priority
+     * @param Sender|string|null $sender
      * @return Message[]
      * @throws Exception
      */
-    public function sendMessage($recipient, string $message, $priority = false): array
+    public function sendMessage($recipient, string $message, $priority = false, $sender = null): array
     {
         $recipient = (array)$recipient;
-        if (count($recipient) > self::BULK_LIMIT) {
-            throw new Exception('Bulk sending only allows up to ' . self::BULK_LIMIT . ' numbers per API call.');
+        if (count($recipient) > self::MAX) {
+            throw new Exception('Bulk sending only allows up to ' . self::MAX . ' numbers per API call.');
         }
 
-        return $this->execute($priority ? 'priority' : 'messages', [
+        return $this->execute('post', $priority ? 'priority' : 'messages', [
             'form_params' => [
-                'sendername' => $this->senderName,
+                'sendername' => $sender ?: $this->senderName,
                 'apikey' => $this->apiKey,
                 'message' => $message,
                 'number' => $recipient,
             ],
-        ], Message::class);
+        ], Message::class, true);
     }
 
     /**
      * @param string $recipient
      * @param string $message
+     * @param Sender|string|null $sender
      * @return Message|null
      * @throws Exception
      */
-    public function sendOTP(string $recipient, string $message): ?Message
+    public function sendOTP(string $recipient, string $message, $sender = null): ?Message
     {
-        $messages = $this->execute('otp', [
+        return $this->execute('post', 'otp', [
             'form_params' => [
-                'sendername' => $this->senderName,
+                'sendername' => $sender ?: $this->senderName,
                 'apikey' => $this->apiKey,
                 'message' => $message,
                 'number' => $recipient,
             ],
         ], Message::class);
-
-        return $messages[0] ?? null;
     }
 
     /**
@@ -147,7 +171,7 @@ class Client
     {
         $options['apikey'] = $this->apiKey;
 
-        return $this->execute('messages', $options, Message::class);
+        return $this->execute('get', 'messages', $options, Message::class);
     }
 
     /**
@@ -157,12 +181,77 @@ class Client
      */
     public function getMessage(int $messageId): ?Message
     {
-        $messages = $this->execute(
+        return $this->execute(
+            'get',
             'messages/' . $messageId,
             ['query' => ['apikey' => $this->apiKey]],
             Message::class
         );
+    }
 
-        return $messages[0] ?? null;
+    /**
+     * @return Account|null
+     * @throws Exception
+     */
+    public function getAccount(): ?Account
+    {
+        return $this->execute('get', 'account', ['query' => ['apikey' => $this->apiKey]], Account::class);
+    }
+
+    /**
+     * @param int $limit
+     * @param int $page
+     * @return Sender[]
+     * @throws Exception
+     */
+    public function getSenders($limit = self::MAX, $page = self::PAGE): array
+    {
+        $this->validateLimit($limit);
+
+        return $this->execute('get', 'account/sendernames', [
+            'query' => [
+                'apikey' => $this->apiKey,
+                'limit' => $limit,
+                'page' => $page,
+            ]
+        ], Sender::class, true);
+    }
+
+    /**
+     * @param int $limit
+     * @param int $page
+     * @return User[]
+     * @throws Exception
+     */
+    public function getUsers($limit = self::MAX, $page = self::PAGE): array
+    {
+        $this->validateLimit($limit);
+
+        return $this->execute('get', 'account/users', [
+            'query' => [
+                'apikey' => $this->apiKey,
+                'limit' => $limit,
+                'page' => $page,
+            ]
+        ], User::class, true);
+    }
+
+    /**
+     * @param int $limit
+     * @param int $page
+     * @return Transaction[]
+     * @throws Exception
+     */
+    public function getTransactions($limit = self::MAX, $page = self::PAGE): array
+    {
+        $this->validateLimit($limit);
+
+        return $this->execute('get', 'account/transactions', [
+            'query' => [
+                'apikey' => $this->apiKey,
+                'limit' => $limit,
+                'page' => $page,
+            ]
+        ], Transaction::class, true);
     }
 }
